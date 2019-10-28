@@ -1,6 +1,8 @@
 const dotenv = require('dotenv')
 const AWS = require('aws-sdk')
 const Web3 = require('web3')
+var https = require('https')
+var util = require('util')
 
 dotenv.config()
 
@@ -8,6 +10,8 @@ AWS.config.update({
     region: "us-west-2",
     endpoint: "http://localhost:8000"
 })
+
+const ETHERSCAN_URL = process.env.ETHERSCAN_URL
 
 var docClient = new AWS.DynamoDB.DocumentClient()
 var web3
@@ -20,11 +24,16 @@ exports.handler = async function(event, context, callback) {
 
         let currentBlock = await web3.eth.getBlockNumber()
         let lastQueriedBlock = await getLastQueriedBlock()
-        const fromBlock = lastQueriedBlock || (currentBlock - 50000)
+        const fromBlock = lastQueriedBlock || (currentBlock - 100000)
 
         console.log("Query from block: " + fromBlock + " to block :" + currentBlock)
 
         let votes = await getEvents(fromBlock, currentBlock).then(events => getVotesFromEvents(events))
+
+        if (votes.length > 0) {
+            notifyChat(fromBlock, currentBlock, votes)
+        }
+
         persistCurrentBlock(currentBlock)
 
         callback(null, votes)
@@ -75,6 +84,27 @@ async function getLastQueriedBlock() {
     }
 }
 
+async function getEventDetails(event) {
+    var transaction = await web3.eth.getTransaction(event['transactionHash'])
+    var voter_deposit = await chiefContract.methods.deposits(transaction['from']).call()
+    var yay = await chiefContract.methods.slates(event['returnValues']['slate'], 0).call().catch((err) => console.debug("No corresponding yay"));
+    if (yay) {
+        var approvals = await chiefContract.methods.approvals(yay).call()
+        var yay_approvals = web3.utils.fromWei(approvals, 'ether')
+    }
+    var hat = await chiefContract.methods.hat().call()
+    return {
+        "hat": hat,
+        "voter": transaction['from'],
+        "voter_deposit": web3.utils.fromWei(voter_deposit, 'ether'),
+        "slate": event['returnValues']['slate'],
+        "yay": yay,
+        "yay_approvals": yay_approvals,
+        "block": transaction['blockNumber'],
+        "tx": event['transactionHash']
+    }
+}
+
 function persistCurrentBlock(currentBlock) {
     var updateParams = {
         TableName: 'VoteBlock',
@@ -101,23 +131,41 @@ function persistCurrentBlock(currentBlock) {
     })
 }
 
-async function getEventDetails(event) {
-    var transaction = await web3.eth.getTransaction(event['transactionHash'])
-    var voter_deposit = await chiefContract.methods.deposits(transaction['from']).call()
-    var yay = await chiefContract.methods.slates(event['returnValues']['slate'], 0).call().catch((err) => console.debug("No corresponding yay"));
-    if (yay) {
-        var approvals = await chiefContract.methods.approvals(yay).call()
-        var yay_approvals = web3.utils.fromWei(approvals, 'ether')
+function notifyChat(fromBlock, currentBlock, votes) {
+
+    text = "*New Votes between block " + fromBlock + " and block " + currentBlock +"*"
+
+    votes.forEach(vote => text = text + "\n\n*Voter*: [" + vote['voter'] + "](" + ETHERSCAN_URL + "address/" + vote['voter'] + ")" +
+                                        "\n *Voter Deposit*: " + vote['voter_deposit'] + " MKR" +
+                                        "\n*Slate*: " + vote['slate'] +
+                                        "\n*Yay*: [" + vote['yay'] + "](" + ETHERSCAN_URL + "address/" + vote['yay'] + ")" +
+                                        "\n*Current yay approvals*: " + vote['yay_approvals'] + " MKR" +
+                                        "\n*Current hat*: [" + vote['hat'] + "](" + ETHERSCAN_URL + "address/" + vote['hat'] + ")" +
+                                        "\n*Transaction*: [" + vote['tx'] + "](" + ETHERSCAN_URL + "tx/" + vote['tx'] + ")" +
+                                        "\n*Block*: [" + vote['block'] + "](" + ETHERSCAN_URL + "block/" + vote['block'] + ")")
+
+    var message = {
+        "username": "Vote watcher",
+        "icon_emoji": ":warning:",
+        "text": text
     }
-    var hat = await chiefContract.methods.hat().call()
-    return {
-        "hat": hat,
-        "voter": transaction['from'],
-        "voter_deposit": web3.utils.fromWei(voter_deposit, 'ether'),
-        "slate": event['returnValues']['slate'],
-        "yay": yay,
-        "yay_approvals": yay_approvals,
-        "block": transaction['blockNumber'],
-        "tx": event['transactionHash']
-    }
+
+    console.log(message)
+
+    var POST_OPTIONS = {
+        hostname: process.env.SERVER,
+        path: process.env.PATH,
+        method: 'POST',
+    };
+
+    const req = https.request(POST_OPTIONS, (res) => {
+        res.setEncoding('utf8')
+    });
+
+    req.on('error', (e) => {
+        console.error(e.message)
+    });
+
+    req.write(util.format("%j", message));
+    req.end()
 }
