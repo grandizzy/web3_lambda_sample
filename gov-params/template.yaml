@@ -1,0 +1,9 @@
+AWSTemplateFormatVersion : '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Resources:
+  ParamsWatcher:
+    Type: "AWS::Serverless::Function"
+    Properties:
+      Runtime: nodejs10.x
+      Handler: index.handler
+      Timeout: 120
