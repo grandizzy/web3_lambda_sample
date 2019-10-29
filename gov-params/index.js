@@ -17,4 +17,6 @@ exports.handler = async function(event, context, callback) {
     const systemData = maker.service('mcd:systemData')
     const systemWideDebtCeiling = await systemData.getSystemWideDebtCeiling()
     console.log("System Wide Debt Ceiling: " + systemWideDebtCeiling)
+    const annualBasedRate = await systemData.getAnnualBaseRate()
+    console.log("Base component of stability fee in percentage per year: " + annualBasedRate)
 }
